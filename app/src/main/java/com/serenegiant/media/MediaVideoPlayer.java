@@ -776,8 +776,12 @@ public class MediaVideoPlayer {
         mVideoBufferInfo = null;
         mVideoInputBuffers = mVideoOutputBuffers = null;
 		if (mMetadata != null) {
-			mMetadata.release();
-			mMetadata = null;
+            try {
+                mMetadata.release();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+            mMetadata = null;
 		}
 		synchronized (mSync) {
 			mVideoOutputDone = mVideoInputDone = true;

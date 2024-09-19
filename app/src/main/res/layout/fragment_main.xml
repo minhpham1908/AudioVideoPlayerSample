@@ -49,7 +49,7 @@
         android:layout_height="wrap_content"
         android:layout_alignBottom="@id/player_view"
         android:layout_centerHorizontal="true"
-        android:layout_marginBottom="20dp"
+        android:layout_marginBottom="0dp"
         android:background="@null"
         android:scaleType="fitXY"
         android:src="@android:drawable/ic_media_play" />

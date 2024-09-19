@@ -115,7 +115,7 @@ public class PlayerFragment extends Fragment {
 		try {
 			final File dir = activity.getFilesDir();
 			dir.mkdirs();
-			final File path = new File(dir, "easter_egg_nexus9_small.mp4");
+			final File path = new File(dir, "test.mp4");
 			prepareSampleMovie(path);
 			mPlayerButton.setColorFilter(0x7fff0000);	// turn red
 //			mPlayer = new MediaVideoPlayer(mPlayerView.getSurface(), mIFrameCallback);
@@ -180,7 +180,7 @@ public class PlayerFragment extends Fragment {
 		final Activity activity = getActivity();
 		if (!path.exists()) {
 			if (DEBUG) Log.i(TAG, "copy sample movie file from res/raw to app private storage");
-			final BufferedInputStream in = new BufferedInputStream(activity.getResources().openRawResource(R.raw.easter_egg_nexus9_small));
+			final BufferedInputStream in = new BufferedInputStream(activity.getResources().openRawResource(R.raw.test));
 			final BufferedOutputStream out = new BufferedOutputStream(activity.openFileOutput(path.getName(), Context.MODE_PRIVATE));
 			byte[] buf = new byte[8192];
 			int size = in.read(buf);

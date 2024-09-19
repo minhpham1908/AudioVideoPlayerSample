@@ -613,7 +613,7 @@ public class MediaMoviePlayer {
 		        if (DEBUG) Log.v(TAG, String.format("getMinBufferSize=%d,max_input_size=%d,mAudioInputBufSize=%d",min_buf_size, max_input_size, mAudioInputBufSize));
 		        //
 		        mAudioTrack = new AudioTrack(AudioManager.STREAM_MUSIC,
-		        	mAudioSampleRate,
+		        	44100,
 		        	(mAudioChannels == 1 ? AudioFormat.CHANNEL_OUT_MONO : AudioFormat.CHANNEL_OUT_STEREO),
 		        	AudioFormat.ENCODING_PCM_16BIT,
 		        	mAudioInputBufSize,
@@ -1060,8 +1060,12 @@ public class MediaMoviePlayer {
         mVideoInputBuffers = mVideoOutputBuffers = null;
         mAudioInputBuffers = mAudioOutputBuffers = null;
 		if (mMetadata != null) {
-			mMetadata.release();
-			mMetadata = null;
+            try {
+                mMetadata.release();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+            mMetadata = null;
 		}
 		synchronized (mSync) {
 			mState = STATE_STOP;
