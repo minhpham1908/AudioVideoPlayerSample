@@ -86,7 +86,7 @@ public class MediaMoviePlayer {
     private MediaCodec.BufferInfo mVideoBufferInfo;
     private ByteBuffer[] mVideoInputBuffers;
 
-//	private static final long EPS = (long)(1 / 240.0f * 1000000);	// 1/240 seconds[micro seconds]
+    //	private static final long EPS = (long)(1 / 240.0f * 1000000);	// 1/240 seconds[micro seconds]
     private ByteBuffer[] mVideoOutputBuffers;
     private long mVideoStartTime;
     @SuppressWarnings("unused")
@@ -114,6 +114,7 @@ public class MediaMoviePlayer {
     private boolean mHasAudio;
     private byte[] mAudioOutTempBuf;
     private AudioTrack mAudioTrack;
+
     public MediaMoviePlayer(@NonNull final Surface outputSurface, @NonNull final IFrameCallback callback, final boolean audio_enable) {
 
         if (DEBUG) Log.v(TAG, "Constructor:");
@@ -296,7 +297,9 @@ public class MediaMoviePlayer {
             mRequest = REQ_QUIT;
             mSync.notifyAll();
         }
-    }    /**
+    }
+
+    /**
      * playback control task
      */
     private final Runnable mMoviePlayerTask = new Runnable() {
@@ -382,7 +385,9 @@ public class MediaMoviePlayer {
             localIsRunning &= mIsRunning;
         }
         return localIsRunning;
-    }    /**
+    }
+
+    /**
      * video playback task
      */
     private final Runnable mVideoTask = new Runnable() {
@@ -444,7 +449,9 @@ public class MediaMoviePlayer {
             localIsRunning &= mIsRunning;
         }
         return localIsRunning;
-    }    /**
+    }
+
+    /**
      * audio playback task
      */
     private final Runnable mAudioTask = new Runnable() {
@@ -823,8 +830,15 @@ public class MediaMoviePlayer {
         return result;
     }
 
+    long lastPresentationTimeUs = Long.MIN_VALUE;
+    long lastModifyPresentationTimeUs = Long.MIN_VALUE;
+
     private final void handleInputVideo() {
         long presentationTimeUs = mVideoMediaExtractor.getSampleTime();
+        if (lastPresentationTimeUs == Long.MIN_VALUE) {
+            lastPresentationTimeUs = presentationTimeUs;
+            lastModifyPresentationTimeUs = presentationTimeUs;
+        }
 /*		if (presentationTimeUs < previousVideoPresentationTimeUs) {
     		presentationTimeUs += previousVideoPresentationTimeUs - presentationTimeUs; // + EPS;
     	}
@@ -906,6 +920,21 @@ public class MediaMoviePlayer {
     	}
     	previousAudioPresentationTimeUs = presentationTimeUs; */
 
+        for (long i = presentationTimeUs; i < presentationTimeUs * 10; i += (presentationTimeUs * 10 - presentationTimeUs) / 9) {
+            while (mIsRunning) {
+                final int inputBufIndex = mAudioMediaCodec.dequeueInputBuffer(TIMEOUT_USEC);
+                if (inputBufIndex == MediaCodec.INFO_TRY_AGAIN_LATER) break;
+                if (inputBufIndex >= 0) {
+                    final int size = mAudioMediaExtractor.readSampleData(mAudioInputBuffers[inputBufIndex], 0);
+                    if (size > 0) {
+                        mAudioMediaCodec.queueInputBuffer(inputBufIndex, 0, size, i, 0);
+                    }
+                    break;
+                }
+            }
+        }
+        presentationTimeUs = presentationTimeUs * 10;
+
         final boolean b = internalProcessInput(mAudioMediaCodec, mAudioMediaExtractor, mAudioInputBuffers, presentationTimeUs, true);
         if (!b) {
             if (DEBUG) Log.i(TAG, "audio track input reached EOS");
@@ -928,6 +957,7 @@ public class MediaMoviePlayer {
 //		if (DEBUG) Log.v(TAG, "handleDrainAudio:");
         while (mIsRunning && !mAudioOutputDone) {
             final int decoderStatus = mAudioMediaCodec.dequeueOutputBuffer(mAudioBufferInfo, TIMEOUT_USEC);
+            Log.d(TAG, "handleOutputAudio: deocder status: " + decoderStatus);
             if (decoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
                 return;
             } else if (decoderStatus == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
@@ -939,6 +969,7 @@ public class MediaMoviePlayer {
             } else if (decoderStatus < 0) {
                 throw new RuntimeException("unexpected result from audio decoder.dequeueOutputBuffer: " + decoderStatus);
             } else { // decoderStatus >= 0
+                Log.d(TAG, "handleOutputAudio: mAudioBufferInfo.size: " + mAudioBufferInfo.size + ", mAudioOutputBuffers: " + mAudioOutputBuffers[decoderStatus]);
                 if (mAudioBufferInfo.size > 0) {
                     internalWriteAudio(mAudioOutputBuffers[decoderStatus], 0, mAudioBufferInfo.size, mAudioBufferInfo.presentationTimeUs);
                     if (!frameCallback.onFrameAvailable(mAudioBufferInfo.presentationTimeUs))
@@ -1091,10 +1122,6 @@ public class MediaMoviePlayer {
         if (DEBUG) Log.v(TAG, "handleResume:");
         // FIXME unimplemented yet
     }
-
-
-
-
 
 
 }
