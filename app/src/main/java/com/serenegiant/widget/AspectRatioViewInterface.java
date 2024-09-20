@@ -20,10 +20,12 @@ package com.serenegiant.widget;
  *  limitations under the License.
  *
  * All files in the folder are under this Apache License, Version 2.0.
-*/
+ */
 
 public interface AspectRatioViewInterface {
     public void setAspectRatio(double aspectRatio);
+
     public void onPause();
+
     public void onResume();
 }
