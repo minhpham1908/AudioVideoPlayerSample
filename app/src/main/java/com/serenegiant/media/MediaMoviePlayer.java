@@ -29,6 +29,7 @@ import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
+import android.media.MediaSync;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.Surface;
@@ -114,6 +115,8 @@ public class MediaMoviePlayer {
     private boolean mHasAudio;
     private byte[] mAudioOutTempBuf;
     private AudioTrack mAudioTrack;
+    MediaSync audioSync = new MediaSync();
+
 
     public MediaMoviePlayer(@NonNull final Surface outputSurface, @NonNull final IFrameCallback callback, final boolean audio_enable) {
 
@@ -638,6 +641,16 @@ public class MediaMoviePlayer {
                     Log.v(TAG, String.format("getMinBufferSize=%d,max_input_size=%d,mAudioInputBufSize=%d", min_buf_size, max_input_size, mAudioInputBufSize));
                 //
                 mAudioTrack = new AudioTrack(AudioManager.STREAM_MUSIC, 44100, (mAudioChannels == 1 ? AudioFormat.CHANNEL_OUT_MONO : AudioFormat.CHANNEL_OUT_STEREO), AudioFormat.ENCODING_PCM_16BIT, mAudioInputBufSize, AudioTrack.MODE_STREAM);
+//                audioSync.setPlaybackParams(new PlaybackParams().setSpeed(0.1f));
+                audioSync.setCallback(new MediaSync.Callback() {
+                    @Override
+                    public void onAudioBufferConsumed(@NonNull MediaSync sync, @NonNull ByteBuffer audioBuffer, int bufferId) {
+                        Log.d(TAG, "onAudioBufferConsumed: ");
+                        mAudioTrack.write(audioBuffer, audioBuffer.limit(), AudioTrack.WRITE_NON_BLOCKING);
+                    }
+                }, null);
+
+
                 try {
                     mAudioTrack.play();
                 } catch (final Exception e) {
@@ -821,7 +834,7 @@ public class MediaMoviePlayer {
             if (inputBufIndex >= 0) {
                 final int size = extractor.readSampleData(inputBuffers[inputBufIndex], 0);
                 if (size > 0) {
-                    codec.queueInputBuffer(inputBufIndex, 0, size, presentationTimeUs, 0);
+                    codec.queueInputBuffer(inputBufIndex, 0, size, presentationTimeUs * 10, 0);
                 }
                 result = extractor.advance();    // return false if no data is available
                 break;
@@ -920,20 +933,20 @@ public class MediaMoviePlayer {
     	}
     	previousAudioPresentationTimeUs = presentationTimeUs; */
 
-        for (long i = presentationTimeUs; i < presentationTimeUs * 10; i += (presentationTimeUs * 10 - presentationTimeUs) / 9) {
-            while (mIsRunning) {
-                final int inputBufIndex = mAudioMediaCodec.dequeueInputBuffer(TIMEOUT_USEC);
-                if (inputBufIndex == MediaCodec.INFO_TRY_AGAIN_LATER) break;
-                if (inputBufIndex >= 0) {
-                    final int size = mAudioMediaExtractor.readSampleData(mAudioInputBuffers[inputBufIndex], 0);
-                    if (size > 0) {
-                        mAudioMediaCodec.queueInputBuffer(inputBufIndex, 0, size, i, 0);
-                    }
-                    break;
-                }
-            }
-        }
-        presentationTimeUs = presentationTimeUs * 10;
+//        for (long i = presentationTimeUs; i < presentationTimeUs * 10; i += (presentationTimeUs * 10 - presentationTimeUs) / 9) {
+//            while (mIsRunning) {
+//                final int inputBufIndex = mAudioMediaCodec.dequeueInputBuffer(TIMEOUT_USEC);
+//                if (inputBufIndex == MediaCodec.INFO_TRY_AGAIN_LATER) break;
+//                if (inputBufIndex >= 0) {
+//                    final int size = mAudioMediaExtractor.readSampleData(mAudioInputBuffers[inputBufIndex], 0);
+//                    if (size > 0) {
+//                        mAudioMediaCodec.queueInputBuffer(inputBufIndex, 0, size, i, 0);
+//                    }
+//                    break;
+//                }
+//            }
+//        }
+//        presentationTimeUs = presentationTimeUs * 10;
 
         final boolean b = internalProcessInput(mAudioMediaCodec, mAudioMediaExtractor, mAudioInputBuffers, presentationTimeUs, true);
         if (!b) {
@@ -971,7 +984,7 @@ public class MediaMoviePlayer {
             } else { // decoderStatus >= 0
                 Log.d(TAG, "handleOutputAudio: mAudioBufferInfo.size: " + mAudioBufferInfo.size + ", mAudioOutputBuffers: " + mAudioOutputBuffers[decoderStatus]);
                 if (mAudioBufferInfo.size > 0) {
-                    internalWriteAudio(mAudioOutputBuffers[decoderStatus], 0, mAudioBufferInfo.size, mAudioBufferInfo.presentationTimeUs);
+                    internalWriteAudio(mAudioOutputBuffers[decoderStatus], decoderStatus, 0, mAudioBufferInfo.size, mAudioBufferInfo.presentationTimeUs);
                     if (!frameCallback.onFrameAvailable(mAudioBufferInfo.presentationTimeUs))
                         mAudioStartTime = adjustPresentationTime(mAudioSync, mAudioStartTime, mAudioBufferInfo.presentationTimeUs);
                 }
@@ -994,8 +1007,7 @@ public class MediaMoviePlayer {
      * @param presentationTimeUs
      * @return ignored
      */
-    protected boolean internalWriteAudio(final ByteBuffer buffer, final int offset, final int size, final long presentationTimeUs) {
-
+    protected boolean internalWriteAudio(final ByteBuffer buffer, final int audioIndex, final int offset, final int size, final long presentationTimeUs) {
 //		if (DEBUG) Log.d(TAG, "internalWriteAudio");
         if (mAudioOutTempBuf.length < size) {
             mAudioOutTempBuf = new byte[size];
@@ -1003,7 +1015,24 @@ public class MediaMoviePlayer {
         buffer.position(offset);
         buffer.get(mAudioOutTempBuf, 0, size);
         buffer.clear();
-        if (mAudioTrack != null) mAudioTrack.write(mAudioOutTempBuf, 0, size);
+
+
+        int newSize = size * 10;
+        byte[] stretchedBuffer = new byte[newSize];
+
+        for (int i = 0; i < size; i += 2) {
+            // Copy each sample multiple times (10x in this case)
+            for (int j = 0; j < 10; j++) {
+                stretchedBuffer[(i * 10) + (j * 2)] = mAudioOutTempBuf[i];
+                stretchedBuffer[(i * 10) + (j * 2) + 1] = mAudioOutTempBuf[i + 1];
+            }
+        }
+
+// Play the stretched audio
+        if (mAudioTrack != null) {
+            mAudioTrack.write(stretchedBuffer, 0, newSize);
+        }
+        Log.d(TAG, "internalWriteAudio:");
         return true;
     }
 
