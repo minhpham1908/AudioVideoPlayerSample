@@ -29,10 +29,10 @@ import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
-import android.media.MediaSync;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.Surface;
+import android.view.animation.PathInterpolator;
 
 import androidx.annotation.NonNull;
 
@@ -115,7 +115,49 @@ public class MediaMoviePlayer {
     private boolean mHasAudio;
     private byte[] mAudioOutTempBuf;
     private AudioTrack mAudioTrack;
-    MediaSync audioSync = new MediaSync();
+    PathInterpolator interpolator = new PathInterpolator(0.5f, 0, 0.5f, 1);
+    Long lastRealTimeVideo = Long.MIN_VALUE;
+    Long lastCorrectedTimeVideo = Long.MIN_VALUE;
+    Long lastRealTime = Long.MIN_VALUE;
+    Long lastCorrectedTime = Long.MIN_VALUE;
+    Long videoTime;
+    Long audioTime;
+    TimeInterpolator timeInterpolator = new TimeInterpolator() {
+        @Override
+        public long interpolate(long time) {
+            if (lastRealTime == Long.MIN_VALUE) {
+                lastRealTime = time;
+                lastCorrectedTime = time;
+            } else {
+                long realDelta = time - lastRealTime;
+                float interpolatedSpeed = (interpolator.getInterpolation((float) time / audioTime)) * (1 - 0.1f) + 0.1f;
+//                    float interpolatedSpeed = 0.5f;
+                long correctedDelta = (long) ((double) realDelta / interpolatedSpeed);
+                lastRealTime = time;
+                lastCorrectedTime += correctedDelta;
+            }
+            Log.d(TAG, " time interpolate: " + ", real time: " + lastRealTime + ", corrected time: " + lastCorrectedTime);
+            return lastCorrectedTime;
+        }
+    };
+    TimeInterpolator timeInterpolatorVideo = new TimeInterpolator() {
+        @Override
+        public long interpolate(long time) {
+            if (lastRealTimeVideo == Long.MIN_VALUE) {
+                lastRealTimeVideo = time;
+                lastCorrectedTimeVideo = time;
+            } else {
+                long realDelta = time - lastRealTimeVideo;
+                float interpolatedSpeed = (interpolator.getInterpolation((float) time / videoTime)) * (1 - 0.1f) + 0.1f;
+//                    float interpolatedSpeed = 0.5f;
+                long correctedDelta = (long) ((double) realDelta / interpolatedSpeed);
+                lastRealTimeVideo = time;
+                lastCorrectedTimeVideo += correctedDelta;
+            }
+            Log.d(TAG, " time interpolate: " + ", real time: " + lastRealTime + ", corrected time: " + lastCorrectedTimeVideo);
+            return lastCorrectedTimeVideo;
+        }
+    };
 
 
     public MediaMoviePlayer(@NonNull final Surface outputSurface, @NonNull final IFrameCallback callback, final boolean audio_enable) {
@@ -602,6 +644,8 @@ public class MediaMoviePlayer {
                 mVideoWidth = format.getInteger(MediaFormat.KEY_WIDTH);
                 mVideoHeight = format.getInteger(MediaFormat.KEY_HEIGHT);
                 mDuration = format.getLong(MediaFormat.KEY_DURATION);
+                videoTime = format.getLong(MediaFormat.KEY_DURATION);
+
 
                 if (DEBUG)
                     Log.v(TAG, String.format("format:size(%d,%d),duration=%d,bps=%d,framerate=%f,rotation=%d", mVideoWidth, mVideoHeight, mDuration, mBitrate, mFrameRate, mRotation));
@@ -637,19 +681,11 @@ public class MediaMoviePlayer {
                 if (mAudioInputBufSize > max_input_size) mAudioInputBufSize = max_input_size;
                 final int frameSizeInBytes = mAudioChannels * 2;
                 mAudioInputBufSize = (mAudioInputBufSize / frameSizeInBytes) * frameSizeInBytes;
+                audioTime = format.getLong(MediaFormat.KEY_DURATION);
                 if (DEBUG)
                     Log.v(TAG, String.format("getMinBufferSize=%d,max_input_size=%d,mAudioInputBufSize=%d", min_buf_size, max_input_size, mAudioInputBufSize));
                 //
                 mAudioTrack = new AudioTrack(AudioManager.STREAM_MUSIC, 44100, (mAudioChannels == 1 ? AudioFormat.CHANNEL_OUT_MONO : AudioFormat.CHANNEL_OUT_STEREO), AudioFormat.ENCODING_PCM_16BIT, mAudioInputBufSize, AudioTrack.MODE_STREAM);
-//                audioSync.setPlaybackParams(new PlaybackParams().setSpeed(0.1f));
-                audioSync.setCallback(new MediaSync.Callback() {
-                    @Override
-                    public void onAudioBufferConsumed(@NonNull MediaSync sync, @NonNull ByteBuffer audioBuffer, int bufferId) {
-                        Log.d(TAG, "onAudioBufferConsumed: ");
-                        mAudioTrack.write(audioBuffer, audioBuffer.limit(), AudioTrack.WRITE_NON_BLOCKING);
-                    }
-                }, null);
-
 
                 try {
                     mAudioTrack.play();
@@ -834,7 +870,7 @@ public class MediaMoviePlayer {
             if (inputBufIndex >= 0) {
                 final int size = extractor.readSampleData(inputBuffers[inputBufIndex], 0);
                 if (size > 0) {
-                    codec.queueInputBuffer(inputBufIndex, 0, size, presentationTimeUs * 10, 0);
+                    codec.queueInputBuffer(inputBufIndex, 0, size, presentationTimeUs, 0);
                 }
                 result = extractor.advance();    // return false if no data is available
                 break;
@@ -843,15 +879,15 @@ public class MediaMoviePlayer {
         return result;
     }
 
+    long lastPresentationTimeUsVideo = Long.MIN_VALUE;
+    long lastModifyPresentationTimeUsVideo = Long.MIN_VALUE;
+
     long lastPresentationTimeUs = Long.MIN_VALUE;
     long lastModifyPresentationTimeUs = Long.MIN_VALUE;
 
     private final void handleInputVideo() {
         long presentationTimeUs = mVideoMediaExtractor.getSampleTime();
-        if (lastPresentationTimeUs == Long.MIN_VALUE) {
-            lastPresentationTimeUs = presentationTimeUs;
-            lastModifyPresentationTimeUs = presentationTimeUs;
-        }
+
 /*		if (presentationTimeUs < previousVideoPresentationTimeUs) {
     		presentationTimeUs += previousVideoPresentationTimeUs - presentationTimeUs; // + EPS;
     	}
@@ -895,13 +931,33 @@ public class MediaMoviePlayer {
             } else { // decoderStatus >= 0
                 boolean doRender = false;
                 if (mVideoBufferInfo.size > 0) {
-                    doRender = (mVideoBufferInfo.size != 0) && !internalWriteVideo(mVideoOutputBuffers[decoderStatus], 0, mVideoBufferInfo.size, mVideoBufferInfo.presentationTimeUs);
+                    if (lastPresentationTimeUsVideo == Long.MIN_VALUE) {
+                        lastPresentationTimeUsVideo = mVideoBufferInfo.presentationTimeUs;
+                    }
+                    Log.d(TAG, "handleOutputVideo: delta " + (mVideoBufferInfo.presentationTimeUs - lastPresentationTimeUsVideo));
+                    long correctedTime = timeInterpolatorVideo.interpolate(mVideoBufferInfo.presentationTimeUs);
+                    double timeStretch = 1.0;
+                    if (lastModifyPresentationTimeUsVideo == Long.MIN_VALUE) {
+                        timeStretch = 1.0;
+                    } else {
+                        long dur = correctedTime - lastModifyPresentationTimeUsVideo;
+                        long rawDur = mVideoBufferInfo.presentationTimeUs - lastPresentationTimeUsVideo;
+                        timeStretch = (double) dur / rawDur;
+                    }
+                    lastPresentationTimeUsVideo = mVideoBufferInfo.presentationTimeUs;
+                    lastModifyPresentationTimeUsVideo = correctedTime;
+                    Log.d(TAG, "handleOutputAudio: time stretch: " + timeStretch);
+                    if (!frameCallback.onFrameAvailable(mAudioBufferInfo.presentationTimeUs)) {
+                        mAudioStartTime = adjustPresentationTime(mAudioSync, mAudioStartTime, correctedTime);
+                    }
+                    doRender = (mVideoBufferInfo.size != 0) && !internalWriteVideo(mVideoOutputBuffers[decoderStatus], 0, mVideoBufferInfo.size, correctedTime);
                     if (doRender) {
-                        if (!frameCallback.onFrameAvailable(mVideoBufferInfo.presentationTimeUs))
-                            mVideoStartTime = adjustPresentationTime(mVideoSync, mVideoStartTime, mVideoBufferInfo.presentationTimeUs);
+                        if (!frameCallback.onFrameAvailable(correctedTime))
+                            mVideoStartTime = adjustPresentationTime(mVideoSync, mVideoStartTime, correctedTime);
                     }
                 }
-                mVideoMediaCodec.releaseOutputBuffer(decoderStatus, doRender);
+
+                mVideoMediaCodec.releaseOutputBuffer(decoderStatus, lastModifyPresentationTimeUsVideo);
                 if ((mVideoBufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                     if (DEBUG) Log.d(TAG, "video:output EOS");
                     synchronized (mVideoTask) {
@@ -984,9 +1040,25 @@ public class MediaMoviePlayer {
             } else { // decoderStatus >= 0
                 Log.d(TAG, "handleOutputAudio: mAudioBufferInfo.size: " + mAudioBufferInfo.size + ", mAudioOutputBuffers: " + mAudioOutputBuffers[decoderStatus]);
                 if (mAudioBufferInfo.size > 0) {
-                    internalWriteAudio(mAudioOutputBuffers[decoderStatus], decoderStatus, 0, mAudioBufferInfo.size, mAudioBufferInfo.presentationTimeUs);
-                    if (!frameCallback.onFrameAvailable(mAudioBufferInfo.presentationTimeUs))
-                        mAudioStartTime = adjustPresentationTime(mAudioSync, mAudioStartTime, mAudioBufferInfo.presentationTimeUs);
+                    if (lastPresentationTimeUs == Long.MIN_VALUE) {
+                        lastPresentationTimeUs = mAudioBufferInfo.presentationTimeUs;
+                        Log.d(TAG, "handleOutputAudio: delta first: " + lastPresentationTimeUs);
+                    }
+                    long correctedTime = timeInterpolator.interpolate(mAudioBufferInfo.presentationTimeUs);
+                    double timeStretch = 1.0;
+                    if (lastModifyPresentationTimeUs == Long.MIN_VALUE) {
+                        timeStretch = 1.0;
+                    } else {
+                        long dur = correctedTime - lastModifyPresentationTimeUs;
+                        long rawDur = mAudioBufferInfo.presentationTimeUs - lastPresentationTimeUs;
+                        timeStretch = (double) dur / rawDur;
+                    }
+                    lastPresentationTimeUs = mAudioBufferInfo.presentationTimeUs;
+                    lastModifyPresentationTimeUs = correctedTime;
+                    internalWriteAudio(mAudioOutputBuffers[decoderStatus], 0, mAudioBufferInfo.size, mAudioBufferInfo.presentationTimeUs, (1.0 / timeStretch));
+                    if (!frameCallback.onFrameAvailable(mAudioBufferInfo.presentationTimeUs)) {
+                        mAudioStartTime = adjustPresentationTime(mAudioSync, mAudioStartTime, correctedTime);
+                    }
                 }
                 mAudioMediaCodec.releaseOutputBuffer(decoderStatus, false);
                 if ((mAudioBufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
@@ -1017,24 +1089,61 @@ public class MediaMoviePlayer {
         buffer.clear();
 
 
-        int newSize = size * 10;
-        byte[] stretchedBuffer = new byte[newSize];
-
-        for (int i = 0; i < size; i += 2) {
-            // Copy each sample multiple times (10x in this case)
-            for (int j = 0; j < 10; j++) {
-                stretchedBuffer[(i * 10) + (j * 2)] = mAudioOutTempBuf[i];
-                stretchedBuffer[(i * 10) + (j * 2) + 1] = mAudioOutTempBuf[i + 1];
-            }
-        }
+//        int newSize = size * 10;
+//        byte[] stretchedBuffer = new byte[newSize];
+//
+//        for (int i = 0; i < size; i += 2) {
+//            // Copy each sample multiple times (10x in this case)
+//            for (int j = 0; j < 10; j++) {
+//                stretchedBuffer[(i * 10) + (j * 2)] = mAudioOutTempBuf[i];
+//                stretchedBuffer[(i * 10) + (j * 2) + 1] = mAudioOutTempBuf[i + 1];
+//            }
+//        }
 
 // Play the stretched audio
         if (mAudioTrack != null) {
-            mAudioTrack.write(stretchedBuffer, 0, newSize);
+            mAudioTrack.write(mAudioOutTempBuf, 0, size);
         }
         Log.d(TAG, "internalWriteAudio:");
         return true;
     }
+
+    protected boolean internalWriteAudio(final ByteBuffer buffer, final int offset, final int size, final long presentationTimeUs, final double speedFactor) {
+        if (speedFactor <= 0) throw new IllegalArgumentException("Speed factor must be positive");
+        if (mAudioOutTempBuf.length < size) {
+            mAudioOutTempBuf = new byte[size];
+        }
+        // Read the audio data from the buffer
+        buffer.position(offset);
+//        byte[] audioData = new byte[size];
+        buffer.get(mAudioOutTempBuf, 0, size);
+
+        // Adjust buffer size based on speed factor
+        int newSize = (int) (size / speedFactor);
+        byte[] stretchedBuffer = new byte[newSize];
+
+        int sampleSize = 2;  // Assuming 16-bit PCM audio (2 bytes per sample)
+        int stretchedIndex = 0;
+
+        // For each sample in the original buffer, adjust it based on the speed factor
+        for (int i = 0; i < size; i += sampleSize) {
+            // Copy the current sample to the new buffer
+            for (int j = 0; j < (1 / speedFactor); j++) {
+                if (stretchedIndex < newSize - 1) {
+                    stretchedBuffer[stretchedIndex] = mAudioOutTempBuf[i];         // Copy left byte of the sample
+                    stretchedBuffer[stretchedIndex + 1] = mAudioOutTempBuf[i + 1]; // Copy right byte of the sample
+                    stretchedIndex += sampleSize;
+                }
+            }
+        }
+
+        // Play the stretched audio using AudioTrack
+        if (mAudioTrack != null) {
+            mAudioTrack.write(stretchedBuffer, 0, stretchedIndex);
+        }
+        return true;
+    }
+
 
     /**
      * //	 * adjusting frame rate
