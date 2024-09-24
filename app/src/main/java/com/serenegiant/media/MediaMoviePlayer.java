@@ -947,13 +947,11 @@ public class MediaMoviePlayer {
                     lastPresentationTimeUsVideo = mVideoBufferInfo.presentationTimeUs;
                     lastModifyPresentationTimeUsVideo = correctedTime;
                     Log.d(TAG, "handleOutputAudio: time stretch: " + timeStretch);
-                    if (!frameCallback.onFrameAvailable(mAudioBufferInfo.presentationTimeUs)) {
-                        mAudioStartTime = adjustPresentationTime(mAudioSync, mAudioStartTime, correctedTime);
-                    }
                     doRender = (mVideoBufferInfo.size != 0) && !internalWriteVideo(mVideoOutputBuffers[decoderStatus], 0, mVideoBufferInfo.size, correctedTime);
                     if (doRender) {
-                        if (!frameCallback.onFrameAvailable(correctedTime))
+                        if (!frameCallback.onFrameAvailable(correctedTime)) {
                             mVideoStartTime = adjustPresentationTime(mVideoSync, mVideoStartTime, correctedTime);
+                        }
                     }
                 }
 
