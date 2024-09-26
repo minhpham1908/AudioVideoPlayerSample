@@ -90,6 +90,8 @@ public class MediaMoviePlayer {
     //	private static final long EPS = (long)(1 / 240.0f * 1000000);	// 1/240 seconds[micro seconds]
     private ByteBuffer[] mVideoOutputBuffers;
     private long mVideoStartTime;
+
+    SpeedController speedController = new SpeedController();
     @SuppressWarnings("unused")
     private long previousVideoPresentationTimeUs = -1;
     private volatile int mVideoTrackIndex;
@@ -330,6 +332,22 @@ public class MediaMoviePlayer {
         }
     }
 
+    /**
+     * request resume from pausing<br>
+     * this function is un-implemented yet
+     */
+    public final void pauseResume() {
+        if (DEBUG) Log.v(TAG, "togle pause resume, state" + mState);
+        synchronized (mSync) {
+            if (mState == STATE_PLAYING) {
+                mRequest = REQ_PAUSE;
+            } else if (mState == STATE_PAUSED) {
+                mRequest = REQ_RESUME;
+            }
+            mSync.notifyAll();
+        }
+    }
+
 //--------------------------------------------------------------------------------
 
     /**
@@ -441,10 +459,10 @@ public class MediaMoviePlayer {
             if (DEBUG) Log.v(TAG, "VideoTask:start");
             for (; mIsRunning && !mVideoInputDone && !mVideoOutputDone; ) {
                 try {
-                    if (!mVideoInputDone) {
+                    if (!mVideoInputDone && mState == STATE_PLAYING) {
                         handleInputVideo();
                     }
-                    if (!mVideoOutputDone) {
+                    if (!mVideoOutputDone && mState == STATE_PLAYING) {
                         handleOutputVideo(mCallback);
                     }
                 } catch (final Exception e) {
@@ -502,13 +520,14 @@ public class MediaMoviePlayer {
     private final Runnable mAudioTask = new Runnable() {
         @Override
         public void run() {
-            if (DEBUG) Log.v(TAG, "AudioTask:start");
+            if (DEBUG) Log.v(TAG, "AudioTask : start");
             for (; mIsRunning && !mAudioInputDone && !mAudioOutputDone; ) {
+                Log.d(TAG, "AudioTask looping +" + mState);
                 try {
-                    if (!mAudioInputDone) {
+                    if (!mAudioInputDone && mState == STATE_PLAYING) {
                         handleInputAudio();
                     }
-                    if (!mAudioOutputDone) {
+                    if (!mAudioOutputDone && mState == STATE_PLAYING) {
                         handleOutputAudio(mCallback);
                     }
                 } catch (final Exception e) {
@@ -827,18 +846,22 @@ public class MediaMoviePlayer {
         if (newTime < 0) return;
 
         if (mVideoTrackIndex >= 0) {
-            mVideoMediaExtractor.seekTo(newTime, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
+            Log.d(TAG, "media codec flushed");
+            mVideoMediaExtractor.seekTo(newTime, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
             mVideoMediaExtractor.advance();
+            mVideoMediaCodec.flush();
         }
         if (mAudioTrackIndex >= 0) {
-            mAudioMediaExtractor.seekTo(newTime, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
+            mAudioTrack.flush();
+            mAudioMediaExtractor.seekTo(newTime, MediaExtractor.SEEK_TO_PREVIOUS_SYNC);
             mAudioMediaExtractor.advance();
+
         }
         mRequestTime = -1;
     }
 
     private final void handleLoop(final IFrameCallback frameCallback) {
-//		if (DEBUG) Log.d(TAG, "handleLoop");
+        if (DEBUG) Log.d(TAG, "handleLoop");
 
         synchronized (mSync) {
             try {
@@ -862,15 +885,20 @@ public class MediaMoviePlayer {
      */
     protected boolean internalProcessInput(final MediaCodec codec, final MediaExtractor extractor, final ByteBuffer[] inputBuffers, final long presentationTimeUs, final boolean isAudio) {
 
-//		if (DEBUG) Log.v(TAG, "internalProcessInput:presentationTimeUs=" + presentationTimeUs);
+        if (DEBUG) Log.v(TAG, "internalProcessInput:presentationTimeUs=" + presentationTimeUs);
         boolean result = true;
         while (mIsRunning) {
             final int inputBufIndex = codec.dequeueInputBuffer(TIMEOUT_USEC);
+            Log.d(TAG, "internalProcessInput: deque Index=" + inputBufIndex);
             if (inputBufIndex == MediaCodec.INFO_TRY_AGAIN_LATER) break;
             if (inputBufIndex >= 0) {
                 final int size = extractor.readSampleData(inputBuffers[inputBufIndex], 0);
                 if (size > 0) {
-                    codec.queueInputBuffer(inputBufIndex, 0, size, presentationTimeUs, 0);
+                    int flag = 0;
+                    if (mRequestTime != -1) {
+                        flag = 2;
+                    }
+                    codec.queueInputBuffer(inputBufIndex, 0, size, presentationTimeUs, flag);
                 }
                 result = extractor.advance();    // return false if no data is available
                 break;
@@ -886,6 +914,7 @@ public class MediaMoviePlayer {
     long lastModifyPresentationTimeUs = Long.MIN_VALUE;
 
     private final void handleInputVideo() {
+        Log.d(TAG, "handleInputVideo: " + mRequestTime);
         long presentationTimeUs = mVideoMediaExtractor.getSampleTime();
 
 /*		if (presentationTimeUs < previousVideoPresentationTimeUs) {
@@ -935,8 +964,8 @@ public class MediaMoviePlayer {
                         lastPresentationTimeUsVideo = mVideoBufferInfo.presentationTimeUs;
                     }
                     Log.d(TAG, "handleOutputVideo: delta " + (mVideoBufferInfo.presentationTimeUs - lastPresentationTimeUsVideo));
-                    long correctedTime = timeInterpolatorVideo.interpolate(mVideoBufferInfo.presentationTimeUs);
-//                    long correctedTime = mVideoBufferInfo.presentationTimeUs;
+//                    long correctedTime = timeInterpolatorVideo.interpolate(mVideoBufferInfo.presentationTimeUs);
+                    long correctedTime = mVideoBufferInfo.presentationTimeUs;
                     double timeStretch = 1.0;
                     if (lastModifyPresentationTimeUsVideo == Long.MIN_VALUE) {
                         timeStretch = 1.0;
@@ -949,13 +978,16 @@ public class MediaMoviePlayer {
                     lastModifyPresentationTimeUsVideo = correctedTime;
                     Log.d(TAG, "handleOutputAudio: time stretch: " + timeStretch);
                     doRender = (mVideoBufferInfo.size != 0) && !internalWriteVideo(mVideoOutputBuffers[decoderStatus], 0, mVideoBufferInfo.size, correctedTime);
+
                     if (doRender) {
                         if (!frameCallback.onFrameAvailable(correctedTime)) {
-                            mVideoStartTime = adjustPresentationTime(mVideoSync, mVideoStartTime, correctedTime);
+//                            speedController.preRender(correctedTime);
+                            mVideoStartTime = adjustPresentationTime("Video", mVideoSync, mVideoStartTime, correctedTime);
                         }
                     }
                 }
                 Log.d(TAG, "handleOutputVideo: release output time:" + lastModifyPresentationTimeUsVideo);
+
                 mVideoMediaCodec.releaseOutputBuffer(decoderStatus, lastModifyPresentationTimeUsVideo * 1000);
                 if ((mVideoBufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                     if (DEBUG) Log.d(TAG, "video:output EOS");
@@ -967,6 +999,7 @@ public class MediaMoviePlayer {
             }
         }
     }
+
 
     /**
      * @param buffer
@@ -1025,7 +1058,7 @@ public class MediaMoviePlayer {
 //		if (DEBUG) Log.v(TAG, "handleDrainAudio:");
         while (mIsRunning && !mAudioOutputDone) {
             final int decoderStatus = mAudioMediaCodec.dequeueOutputBuffer(mAudioBufferInfo, TIMEOUT_USEC);
-            Log.d(TAG, "handleOutputAudio: deocder status: " + decoderStatus);
+            Log.d(TAG, "handleOutputAudio: decoder status: " + decoderStatus);
             if (decoderStatus == MediaCodec.INFO_TRY_AGAIN_LATER) {
                 return;
             } else if (decoderStatus == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
@@ -1043,8 +1076,8 @@ public class MediaMoviePlayer {
                         lastPresentationTimeUs = mAudioBufferInfo.presentationTimeUs;
                         Log.d(TAG, "handleOutputAudio: delta first: " + lastPresentationTimeUs);
                     }
-                    long correctedTime = timeInterpolator.interpolate(mAudioBufferInfo.presentationTimeUs);
-//                    long correctedTime = mAudioBufferInfo.presentationTimeUs;
+//                    long correctedTime = timeInterpolator.interpolate(mAudioBufferInfo.presentationTimeUs);
+                    long correctedTime = mAudioBufferInfo.presentationTimeUs;
                     double timeStretch = 1.0;
                     if (lastModifyPresentationTimeUs == Long.MIN_VALUE) {
                         timeStretch = 1.0;
@@ -1058,7 +1091,7 @@ public class MediaMoviePlayer {
                     lastModifyPresentationTimeUs = correctedTime;
                     internalWriteAudio(mAudioOutputBuffers[decoderStatus], decoderStatus, 0, mAudioBufferInfo.size, mAudioBufferInfo.presentationTimeUs, correctedTime, (1.0 / timeStretch));
                     if (!frameCallback.onFrameAvailable(mAudioBufferInfo.presentationTimeUs)) {
-                        mAudioStartTime = adjustPresentationTime(mAudioSync, mAudioStartTime, correctedTime);
+                        mAudioStartTime = adjustPresentationTime("Audio", mAudioSync, mAudioStartTime, correctedTime);
                     }
                 }
                 mAudioMediaCodec.releaseOutputBuffer(decoderStatus, false);
@@ -1145,6 +1178,7 @@ public class MediaMoviePlayer {
         return true;
     }
 
+    long pauseTime = 0;
 
     /**
      * //	 * adjusting frame rate
@@ -1154,13 +1188,17 @@ public class MediaMoviePlayer {
      * @param presentationTimeUs
      * @return startTime
      */
-    protected long adjustPresentationTime(final Object sync, final long startTime, final long presentationTimeUs) {
-
+    protected long adjustPresentationTime(String tag, final Object sync, final long startTime, final long presentationTimeUs) {
+        Log.d(TAG, tag + " adjustPresentationTime start time: " + startTime);
+        long t = presentationTimeUs - (System.nanoTime() / 1000 - startTime) - pauseTime;
+        Log.d(TAG, tag + " adjustPresentationTime time call: " + t);
         if (startTime > 0) {
-            for (long t = presentationTimeUs - (System.nanoTime() / 1000 - startTime); t > 0; t = presentationTimeUs - (System.nanoTime() / 1000 - startTime)) {
+            for (; t > 0; t = presentationTimeUs - (System.nanoTime() / 1000 - startTime ) - pauseTime) {
                 synchronized (sync) {
                     try {
+                        Log.d(TAG, tag + " adjustPresentationTime time: " + t);
                         sync.wait(t / 1000, (int) ((t % 1000) * 1000));
+                        pauseTime = 0;
                     } catch (final InterruptedException e) {
                         // ignore
                     }
@@ -1252,15 +1290,47 @@ public class MediaMoviePlayer {
         mAudioOutTempBuf = null;
     }
 
+    long startPauseTime = 0L;
+
     private final void handlePause() {
         if (DEBUG) Log.v(TAG, "handlePause:");
-        // FIXME unimplemented yet
+
+        synchronized (mSync) {
+            mState = STATE_PAUSED;
+            startPauseTime = System.nanoTime();
+            mSync.notifyAll();
+        }
+
+//        synchronized (mAudioTask) {
+//            try {
+//                mAudioTask.wait();
+//            } catch (InterruptedException e) {
+//                throw new RuntimeException(e);
+//            }
+//        }
+//        synchronized (mVideoTask) {
+//            try {
+//                mVideoTask.wait();
+//            } catch (InterruptedException e) {
+//                throw new RuntimeException(e);
+//            }
+//        }
     }
 
     private final void handleResume() {
         if (DEBUG) Log.v(TAG, "handleResume:");
-        // FIXME unimplemented yet
+
+        synchronized (mSync) {
+            mState = STATE_PLAYING;
+            long endPauseTime = System.nanoTime();
+            pauseTime = (endPauseTime - startPauseTime);
+            mSync.notifyAll();
+        }
+//        synchronized (mAudioTask) {
+//            mAudioTask.notifyAll();
+//        }
+//        synchronized (mVideoTask) {
+//            mVideoTask.notifyAll();
+//        }
     }
-
-
 }

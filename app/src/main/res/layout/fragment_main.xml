@@ -47,11 +47,21 @@
         android:id="@+id/play_button"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_above="@+id/seek_to_button"
+        android:layout_centerHorizontal="true"
+        android:layout_marginBottom="50dp"
+        android:background="@null"
+        android:scaleType="fitXY"
+        android:src="@android:drawable/ic_media_play" />
+    <ImageButton
+        android:id="@+id/seek_to_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:layout_alignBottom="@id/player_view"
         android:layout_centerHorizontal="true"
         android:layout_marginBottom="0dp"
         android:background="@null"
         android:scaleType="fitXY"
-        android:src="@android:drawable/ic_media_play" />
+        android:src="@android:drawable/ic_media_ff" />
 
 </RelativeLayout>

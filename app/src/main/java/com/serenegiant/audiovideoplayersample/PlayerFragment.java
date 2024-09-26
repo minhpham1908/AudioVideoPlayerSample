@@ -102,7 +102,11 @@ public class PlayerFragment extends Fragment {
             switch (view.getId()) {
                 case R.id.play_button:
                     if (mPlayer == null) startPlay();
-                    else stopPlay();
+                    else pausePlay();
+                    break;
+                case R.id.seek_to_button:
+                    Log.d(TAG, "onClick: seek to");
+                    mPlayer.seek(4_000_000);
                     break;
             }
         }
@@ -120,6 +124,7 @@ public class PlayerFragment extends Fragment {
         mPlayerView.setAspectRatio(640 / 480.f);
         mPlayerButton = (ImageButton) rootView.findViewById(R.id.play_button);
         mPlayerButton.setOnClickListener(mOnClickListener);
+        rootView.findViewById(R.id.seek_to_button).setOnClickListener(mOnClickListener);
         return rootView;
     }
 
@@ -168,6 +173,17 @@ public class PlayerFragment extends Fragment {
             mPlayer.release();
             mPlayer = null;
             // you should not wait here
+        }
+    }
+
+    /**
+     * request pause
+     */
+    private void pausePlay() {
+        if (DEBUG) Log.v(TAG, "stopRecording:mPlayer=" + mPlayer);
+        mPlayerButton.setColorFilter(0);    // return to default color
+        if (mPlayer != null) {
+            mPlayer.pauseResume();
         }
     }
 
