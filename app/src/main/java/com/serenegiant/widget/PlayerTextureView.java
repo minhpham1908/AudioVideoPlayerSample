@@ -23,12 +23,11 @@ package com.serenegiant.widget;
  */
 
 import android.content.Context;
-import android.graphics.SurfaceTexture;
 import android.util.AttributeSet;
 import android.view.Surface;
-import android.view.TextureView;
+import android.view.SurfaceView;
 
-public class PlayerTextureView extends TextureView implements TextureView.SurfaceTextureListener, AspectRatioViewInterface {
+public class PlayerTextureView extends SurfaceView implements AspectRatioViewInterface {
 
     private double mRequestedAspect = -1.0;
     private Surface mSurface;
@@ -43,7 +42,6 @@ public class PlayerTextureView extends TextureView implements TextureView.Surfac
 
     public PlayerTextureView(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
-        setSurfaceTextureListener(this);
     }
 
     @Override
@@ -103,32 +101,5 @@ public class PlayerTextureView extends TextureView implements TextureView.Surfac
         }
 
         super.onMeasure(widthMeasureSpec, heightMeasureSpec);
-    }
-
-    @Override
-    public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
-        if (mSurface != null) mSurface.release();
-        mSurface = new Surface(surface);
-    }
-
-    @Override
-    public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
-    }
-
-    @Override
-    public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
-        if (mSurface != null) {
-            mSurface.release();
-            mSurface = null;
-        }
-        return true;
-    }
-
-    @Override
-    public void onSurfaceTextureUpdated(SurfaceTexture surface) {
-    }
-
-    public Surface getSurface() {
-        return mSurface;
     }
 }

@@ -936,6 +936,7 @@ public class MediaMoviePlayer {
                     }
                     Log.d(TAG, "handleOutputVideo: delta " + (mVideoBufferInfo.presentationTimeUs - lastPresentationTimeUsVideo));
                     long correctedTime = timeInterpolatorVideo.interpolate(mVideoBufferInfo.presentationTimeUs);
+//                    long correctedTime = mVideoBufferInfo.presentationTimeUs;
                     double timeStretch = 1.0;
                     if (lastModifyPresentationTimeUsVideo == Long.MIN_VALUE) {
                         timeStretch = 1.0;
@@ -954,8 +955,8 @@ public class MediaMoviePlayer {
                         }
                     }
                 }
-
-                mVideoMediaCodec.releaseOutputBuffer(decoderStatus, lastModifyPresentationTimeUsVideo);
+                Log.d(TAG, "handleOutputVideo: release output time:" + lastModifyPresentationTimeUsVideo);
+                mVideoMediaCodec.releaseOutputBuffer(decoderStatus, lastModifyPresentationTimeUsVideo * 1000);
                 if ((mVideoBufferInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                     if (DEBUG) Log.d(TAG, "video:output EOS");
                     synchronized (mVideoTask) {
@@ -1043,9 +1044,11 @@ public class MediaMoviePlayer {
                         Log.d(TAG, "handleOutputAudio: delta first: " + lastPresentationTimeUs);
                     }
                     long correctedTime = timeInterpolator.interpolate(mAudioBufferInfo.presentationTimeUs);
+//                    long correctedTime = mAudioBufferInfo.presentationTimeUs;
                     double timeStretch = 1.0;
                     if (lastModifyPresentationTimeUs == Long.MIN_VALUE) {
                         timeStretch = 1.0;
+                        correctedTime = 0;
                     } else {
                         long dur = correctedTime - lastModifyPresentationTimeUs;
                         long rawDur = mAudioBufferInfo.presentationTimeUs - lastPresentationTimeUs;
@@ -1053,7 +1056,7 @@ public class MediaMoviePlayer {
                     }
                     lastPresentationTimeUs = mAudioBufferInfo.presentationTimeUs;
                     lastModifyPresentationTimeUs = correctedTime;
-                    internalWriteAudio(mAudioOutputBuffers[decoderStatus], 0, mAudioBufferInfo.size, mAudioBufferInfo.presentationTimeUs, (1.0 / timeStretch));
+                    internalWriteAudio(mAudioOutputBuffers[decoderStatus], decoderStatus, 0, mAudioBufferInfo.size, mAudioBufferInfo.presentationTimeUs, correctedTime, (1.0 / timeStretch));
                     if (!frameCallback.onFrameAvailable(mAudioBufferInfo.presentationTimeUs)) {
                         mAudioStartTime = adjustPresentationTime(mAudioSync, mAudioStartTime, correctedTime);
                     }
@@ -1106,7 +1109,7 @@ public class MediaMoviePlayer {
         return true;
     }
 
-    protected boolean internalWriteAudio(final ByteBuffer buffer, final int offset, final int size, final long presentationTimeUs, final double speedFactor) {
+    protected boolean internalWriteAudio(final ByteBuffer buffer, final int decoderStatus, final int offset, final int size, final long presentationTimeUs, final long correctedTime, final double speedFactor) {
         if (speedFactor <= 0) throw new IllegalArgumentException("Speed factor must be positive");
         if (mAudioOutTempBuf.length < size) {
             mAudioOutTempBuf = new byte[size];

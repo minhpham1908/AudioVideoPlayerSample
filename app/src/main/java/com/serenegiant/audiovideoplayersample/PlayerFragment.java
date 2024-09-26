@@ -151,7 +151,7 @@ public class PlayerFragment extends Fragment {
             prepareSampleMovie(path);
             mPlayerButton.setColorFilter(0x7fff0000);    // turn red
 //			mPlayer = new MediaVideoPlayer(mPlayerView.getSurface(), mIFrameCallback);
-            mPlayer = new MediaMoviePlayer(mPlayerView.getSurface(), mIFrameCallback, true);
+            mPlayer = new MediaMoviePlayer(mPlayerView.getHolder().getSurface(), mIFrameCallback, true);
             mPlayer.prepare(path.toString());
         } catch (IOException e) {
             Log.e(TAG, "startPlay:", e);
